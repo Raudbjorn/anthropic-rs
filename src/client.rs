@@ -52,6 +52,8 @@ pub struct AnthropicBuilder {
     custom_backend: Option<Arc<dyn Backend>>,
     timeout: Timeout,
     retry_config: RetryConfig,
+    #[cfg(feature = "oauth")]
+    client_id: Option<String>,
 }
 
 impl AnthropicBuilder {
@@ -64,6 +66,8 @@ impl AnthropicBuilder {
             custom_backend: None,
             timeout: Timeout::default(),
             retry_config: RetryConfig::default(),
+            #[cfg(feature = "oauth")]
+            client_id: None,
         }
     }
 
@@ -140,36 +144,55 @@ impl AnthropicBuilder {
         self
     }
 
+    /// Set the OAuth client ID.
+    ///
+    /// When set, the client will use OAuth authentication with the specified
+    /// client ID. Requires the `oauth` feature.
+    #[cfg(feature = "oauth")]
+    pub fn client_id(mut self, client_id: impl Into<String>) -> Self {
+        self.client_id = Some(client_id.into());
+        self
+    }
+
     pub fn build(self) -> Result<Anthropic> {
         let backend: Arc<dyn Backend> = if let Some(b) = self.custom_backend {
             b
         } else {
-            // Build an AnthropicBackend from the builder fields + env vars
-            let mut bb = AnthropicBackend::builder();
-
-            if let Some(key) = self.api_key {
-                bb = bb.api_key(key);
-            } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-                bb = bb.api_key(key);
+            #[cfg(feature = "oauth")]
+            if let Some(ref _client_id) = self.client_id {
+                // Build an OAuthBackend when client_id is provided
+                let storage = crate::oauth::FileTokenStorage::default_path()
+                    .map_err(|e| AnthropicError::Config(format!("OAuth storage error: {e}")))?;
+                let mut config = crate::oauth::OAuthConfig::default();
+                config = config.with_client_id(_client_id.clone());
+                let mut oauth = crate::oauth::OAuthBackend::with_config(storage, config);
+                if let Some(ref url) = self.base_url {
+                    oauth = oauth.with_base_url(url.clone());
+                } else if let Ok(url) = std::env::var("ANTHROPIC_BASE_URL") {
+                    oauth = oauth.with_base_url(url);
+                }
+                if let Some(ref betas) = self.betas {
+                    oauth = oauth.with_betas(betas.clone());
+                }
+                Arc::new(oauth) as Arc<dyn Backend>
+            } else {
+                Self::build_anthropic_backend(
+                    self.api_key.clone(),
+                    self.auth_token.clone(),
+                    self.base_url.clone(),
+                    self.betas.clone(),
+                )?
             }
 
-            if let Some(token) = self.auth_token {
-                bb = bb.auth_token(token);
-            } else if let Ok(token) = std::env::var("ANTHROPIC_AUTH_TOKEN") {
-                bb = bb.auth_token(token);
+            #[cfg(not(feature = "oauth"))]
+            {
+                Self::build_anthropic_backend(
+                    self.api_key,
+                    self.auth_token,
+                    self.base_url,
+                    self.betas,
+                )?
             }
-
-            if let Some(url) = self.base_url {
-                bb = bb.base_url(url);
-            } else if let Ok(url) = std::env::var("ANTHROPIC_BASE_URL") {
-                bb = bb.base_url(url);
-            }
-
-            if let Some(betas) = self.betas {
-                bb = bb.betas(betas);
-            }
-
-            Arc::new(bb.build()?)
         };
 
         let http = Client::builder()
@@ -183,6 +206,39 @@ impl AnthropicBuilder {
             http,
             retry_config: self.retry_config,
         })
+    }
+
+    fn build_anthropic_backend(
+        api_key: Option<String>,
+        auth_token: Option<String>,
+        base_url: Option<String>,
+        betas: Option<Vec<String>>,
+    ) -> Result<Arc<dyn Backend>> {
+        let mut bb = AnthropicBackend::builder();
+
+        if let Some(key) = api_key {
+            bb = bb.api_key(key);
+        } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            bb = bb.api_key(key);
+        }
+
+        if let Some(token) = auth_token {
+            bb = bb.auth_token(token);
+        } else if let Ok(token) = std::env::var("ANTHROPIC_AUTH_TOKEN") {
+            bb = bb.auth_token(token);
+        }
+
+        if let Some(url) = base_url {
+            bb = bb.base_url(url);
+        } else if let Ok(url) = std::env::var("ANTHROPIC_BASE_URL") {
+            bb = bb.base_url(url);
+        }
+
+        if let Some(betas) = betas {
+            bb = bb.betas(betas);
+        }
+
+        Ok(Arc::new(bb.build()?))
     }
 }
 
@@ -310,6 +366,9 @@ impl Anthropic {
         &self,
         batch_id: &str,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<MessageBatchIndividualResponse>> + Send>>> {
+        // Allow backend to refresh tokens or perform pre-flight checks
+        self.backend.pre_request().await?;
+
         let path_segments: Vec<&str> =
             vec!["v1", "messages", "batches", batch_id, "results"];
 
