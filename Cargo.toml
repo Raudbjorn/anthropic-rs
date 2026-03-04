@@ -1,0 +1,59 @@
+[package]
+name = "anthropic-rs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+description = "Feature-complete Rust SDK for the Anthropic Claude API"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/svnbjrn/anthropic-rs"
+keywords = ["anthropic", "claude", "ai", "llm", "api"]
+categories = ["api-bindings", "web-programming::http-client"]
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart"] }
+tokio = { version = "1", features = ["macros", "time", "sync", "io-util"] }
+tokio-stream = "0.1"
+futures-core = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+bytes = "1"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+url = "2"
+rand = "0.8"
+pin-project-lite = "0.2"
+
+# Bedrock backend (AWS SigV4 signing)
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+wiremock = "0.6"
+assert_matches = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+default = ["rustls-tls"]
+rustls-tls = ["reqwest/rustls-tls"]
+native-tls = ["reqwest/native-tls"]
+beta = []
+blocking = ["tokio/rt-multi-thread"]
+bedrock = ["dep:hmac", "dep:sha2"]
+vertex = []
+foundry = []
+
+[[example]]
+name = "bedrock"
+required-features = ["bedrock"]
+
+[[example]]
+name = "vertex"
+required-features = ["vertex"]
+
+[[example]]
+name = "foundry"
+required-features = ["foundry"]
