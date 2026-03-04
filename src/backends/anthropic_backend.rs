@@ -33,17 +33,6 @@ impl AnthropicBackend {
         Self::builder().from_env().build()
     }
 
-    /// Create a backend with just an API key and base URL.
-    ///
-    /// Used internally by `AnthropicBuilder` for backward compatibility.
-    pub(crate) fn new(api_key: String, base_url: String) -> Self {
-        Self {
-            api_key: Some(api_key),
-            auth_token: None,
-            base_url,
-            betas: DEFAULT_BETAS.iter().map(|s| s.to_string()).collect(),
-        }
-    }
 }
 
 impl Backend for AnthropicBackend {

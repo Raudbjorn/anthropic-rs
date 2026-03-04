@@ -46,7 +46,9 @@ impl std::fmt::Debug for Anthropic {
 /// Builder for constructing an `Anthropic` client.
 pub struct AnthropicBuilder {
     api_key: Option<String>,
+    auth_token: Option<String>,
     base_url: Option<String>,
+    betas: Option<Vec<String>>,
     custom_backend: Option<Arc<dyn Backend>>,
     timeout: Timeout,
     retry_config: RetryConfig,
@@ -56,7 +58,9 @@ impl AnthropicBuilder {
     pub fn new() -> Self {
         Self {
             api_key: None,
+            auth_token: None,
             base_url: None,
+            betas: None,
             custom_backend: None,
             timeout: Timeout::default(),
             retry_config: RetryConfig::default(),
@@ -66,32 +70,71 @@ impl AnthropicBuilder {
     /// Set the API key for the direct Anthropic API.
     ///
     /// Ignored when a custom backend is set via [`backend`](Self::backend).
+    /// Falls back to `ANTHROPIC_API_KEY` env var if not set.
     pub fn api_key(mut self, key: impl Into<String>) -> Self {
         self.api_key = Some(key.into());
+        self
+    }
+
+    /// Set the bearer auth token for the direct Anthropic API.
+    ///
+    /// Used instead of (or alongside) an API key. Ignored when a custom
+    /// backend is set via [`backend`](Self::backend).
+    /// Falls back to `ANTHROPIC_AUTH_TOKEN` env var if not set.
+    pub fn auth_token(mut self, token: impl Into<String>) -> Self {
+        self.auth_token = Some(token.into());
         self
     }
 
     /// Set the base URL for the direct Anthropic API.
     ///
     /// Ignored when a custom backend is set via [`backend`](Self::backend).
+    /// Falls back to `ANTHROPIC_BASE_URL` env var, then `https://api.anthropic.com`.
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = Some(url.into());
         self
     }
 
+    /// Override the beta features sent in the `anthropic-beta` header.
+    ///
+    /// By default, `interleaved-thinking-2025-05-14` and
+    /// `code-execution-2025-05-22` are enabled.
+    /// Ignored when a custom backend is set via [`backend`](Self::backend).
+    pub fn betas(mut self, betas: Vec<String>) -> Self {
+        self.betas = Some(betas);
+        self
+    }
+
+    /// Add a single beta feature to the default set.
+    ///
+    /// Ignored when a custom backend is set via [`backend`](Self::backend).
+    pub fn beta(mut self, beta: impl Into<String>) -> Self {
+        self.betas
+            .get_or_insert_with(Vec::new)
+            .push(beta.into());
+        self
+    }
+
     /// Use a custom backend (e.g., Bedrock, Vertex, Foundry).
     ///
-    /// When set, `api_key` and `base_url` are ignored.
+    /// When set, `api_key`, `auth_token`, `base_url`, and `betas` are ignored —
+    /// the backend handles its own authentication and URL construction.
     pub fn backend(mut self, backend: impl Backend + 'static) -> Self {
         self.custom_backend = Some(Arc::new(backend));
         self
     }
 
+    /// Set HTTP timeouts.
+    ///
+    /// Defaults: 30s connect, 600s (10 min) request.
     pub fn timeout(mut self, timeout: Timeout) -> Self {
         self.timeout = timeout;
         self
     }
 
+    /// Set retry configuration.
+    ///
+    /// Defaults: 2 retries, 500ms initial backoff, 8s max backoff.
     pub fn retry_config(mut self, config: RetryConfig) -> Self {
         self.retry_config = config;
         self
@@ -101,23 +144,32 @@ impl AnthropicBuilder {
         let backend: Arc<dyn Backend> = if let Some(b) = self.custom_backend {
             b
         } else {
-            let api_key = self
-                .api_key
-                .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
-                .ok_or_else(|| {
-                    AnthropicError::Config(
-                        "API key not provided. Set ANTHROPIC_API_KEY, pass to builder, \
-                         or use a custom backend."
-                            .into(),
-                    )
-                })?;
+            // Build an AnthropicBackend from the builder fields + env vars
+            let mut bb = AnthropicBackend::builder();
 
-            let base_url = self
-                .base_url
-                .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok())
-                .unwrap_or_else(|| "https://api.anthropic.com".to_owned());
+            if let Some(key) = self.api_key {
+                bb = bb.api_key(key);
+            } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+                bb = bb.api_key(key);
+            }
 
-            Arc::new(AnthropicBackend::new(api_key, base_url))
+            if let Some(token) = self.auth_token {
+                bb = bb.auth_token(token);
+            } else if let Ok(token) = std::env::var("ANTHROPIC_AUTH_TOKEN") {
+                bb = bb.auth_token(token);
+            }
+
+            if let Some(url) = self.base_url {
+                bb = bb.base_url(url);
+            } else if let Ok(url) = std::env::var("ANTHROPIC_BASE_URL") {
+                bb = bb.base_url(url);
+            }
+
+            if let Some(betas) = self.betas {
+                bb = bb.betas(betas);
+            }
+
+            Arc::new(bb.build()?)
         };
 
         let http = Client::builder()
