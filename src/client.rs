@@ -1,8 +1,6 @@
-use std::pin::Pin;
 use std::sync::Arc;
 
-use bytes::Bytes;
-use futures_core::Stream;
+use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::Client;
 use tracing::{debug, warn};
@@ -18,6 +16,7 @@ use crate::http::retry::{calculate_backoff, is_retryable_status, parse_retry_aft
 use crate::messages::{MessageCountTokensParams, MessageCreateParams, MessageTokensCount};
 use crate::models_api::{ModelInfo, ModelListParams};
 use crate::page::Page;
+use crate::platform;
 use crate::streaming::MessageStream;
 use crate::types::message::Message;
 
@@ -52,6 +51,8 @@ pub struct AnthropicBuilder {
     custom_backend: Option<Arc<dyn Backend>>,
     timeout: Timeout,
     retry_config: RetryConfig,
+    #[cfg(feature = "oauth")]
+    client_id: Option<String>,
 }
 
 impl AnthropicBuilder {
@@ -64,6 +65,8 @@ impl AnthropicBuilder {
             custom_backend: None,
             timeout: Timeout::default(),
             retry_config: RetryConfig::default(),
+            #[cfg(feature = "oauth")]
+            client_id: None,
         }
     }
 
@@ -140,6 +143,16 @@ impl AnthropicBuilder {
         self
     }
 
+    /// Set the OAuth client ID.
+    ///
+    /// When set, the client will use OAuth authentication with the specified
+    /// client ID. Requires the `oauth` feature.
+    #[cfg(feature = "oauth")]
+    pub fn client_id(mut self, client_id: impl Into<String>) -> Self {
+        self.client_id = Some(client_id.into());
+        self
+    }
+
     pub fn build(self) -> Result<Anthropic> {
         let backend: Arc<dyn Backend> = if let Some(b) = self.custom_backend {
             b
@@ -172,11 +185,7 @@ impl AnthropicBuilder {
             Arc::new(bb.build()?)
         };
 
-        let http = Client::builder()
-            .connect_timeout(self.timeout.connect)
-            .timeout(self.timeout.request)
-            .build()
-            .map_err(AnthropicError::Http)?;
+        let http = platform::build_http_client(&self.timeout).map_err(AnthropicError::Http)?;
 
         Ok(Anthropic {
             backend,
@@ -216,6 +225,9 @@ impl Anthropic {
         &self,
         mut params: MessageCreateParams,
     ) -> Result<MessageStream> {
+        // Allow backend to refresh tokens or perform pre-flight checks
+        self.backend.pre_request().await?;
+
         params.stream = Some(true);
         let body = serde_json::to_value(&params)?;
 
@@ -309,7 +321,7 @@ impl Anthropic {
     pub async fn batches_results_stream(
         &self,
         batch_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<MessageBatchIndividualResponse>> + Send>>> {
+    ) -> Result<platform::BoxResultStream<MessageBatchIndividualResponse>> {
         let path_segments: Vec<&str> =
             vec!["v1", "messages", "batches", batch_id, "results"];
 
@@ -340,9 +352,8 @@ impl Anthropic {
             return Err(AnthropicError::from_status(status, hdrs, body));
         }
 
-        let byte_stream = response.bytes_stream();
-        let line_stream = jsonl_stream(byte_stream);
-        Ok(Box::pin(line_stream))
+        let byte_stream: platform::BoxByteStream = Box::pin(response.bytes_stream());
+        Ok(jsonl_stream(byte_stream))
     }
 
     // ── Models ────────────────────────────────────────────────────────
@@ -566,6 +577,9 @@ impl Anthropic {
         body: Option<serde_json::Value>,
         query: &[(&str, String)],
     ) -> Result<T> {
+        // Allow backend to refresh tokens or perform pre-flight checks
+        self.backend.pre_request().await?;
+
         let idempotency_key = uuid::Uuid::new_v4().to_string();
         let mut last_error: Option<AnthropicError> = None;
 
@@ -631,7 +645,7 @@ impl Anthropic {
                                 calculate_backoff(attempt + 1, &self.retry_config)
                             });
                         debug!(attempt, ?backoff, status, "retrying request");
-                        tokio::time::sleep(backoff).await;
+                        platform::sleep(backoff).await;
                         last_error = Some(err);
                         continue;
                     }
@@ -643,7 +657,7 @@ impl Anthropic {
                     if attempt < self.retry_config.max_retries && err.is_retryable() {
                         let backoff = calculate_backoff(attempt + 1, &self.retry_config);
                         warn!(attempt, ?backoff, "retrying after HTTP error");
-                        tokio::time::sleep(backoff).await;
+                        platform::sleep(backoff).await;
                         last_error = Some(err);
                         continue;
                     }
@@ -675,54 +689,90 @@ impl Anthropic {
     }
 }
 
+/// Maximum size of the JSONL line buffer (10 MB).
+/// Guards against unbounded memory growth from pathological or malicious responses.
+const JSONL_MAX_BUFFER_SIZE: usize = 10 * 1024 * 1024;
+
 /// Convert a byte stream (JSONL) into a stream of parsed items.
+///
+/// Uses `platform::spawn_stream` which delegates to tokio on native
+/// and wasm_bindgen_futures on WASM.
+///
+/// Buffers raw bytes (not lossy-decoded strings) to avoid corrupting
+/// multi-byte UTF-8 characters split across chunk boundaries.
 fn jsonl_stream(
-    byte_stream: impl Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send + 'static,
-) -> impl Stream<Item = Result<MessageBatchIndividualResponse>> + Send {
-    async_stream(Box::pin(byte_stream))
-}
+    byte_stream: platform::BoxByteStream,
+) -> platform::BoxResultStream<MessageBatchIndividualResponse> {
+    platform::spawn_stream(move |mut tx| {
+        use futures_util::SinkExt;
 
-fn async_stream(
-    mut stream: Pin<Box<dyn Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send>>,
-) -> impl Stream<Item = Result<MessageBatchIndividualResponse>> + Send {
-    use tokio_stream::StreamExt;
+        async move {
+            let mut stream = byte_stream;
+            let mut buf = Vec::<u8>::new();
 
-    let (tx, rx) = tokio::sync::mpsc::channel(32);
+            while let Some(chunk) = StreamExt::next(&mut stream).await {
+                match chunk {
+                    Ok(bytes) => {
+                        buf.extend_from_slice(&bytes);
 
-    tokio::spawn(async move {
-        let mut buf = String::new();
-
-        while let Some(chunk) = StreamExt::next(&mut stream).await {
-            match chunk {
-                Ok(bytes) => {
-                    buf.push_str(&String::from_utf8_lossy(&bytes));
-                    while let Some(newline_pos) = buf.find('\n') {
-                        let line = buf[..newline_pos].trim().to_owned();
-                        buf = buf[newline_pos + 1..].to_owned();
-                        if line.is_empty() {
-                            continue;
+                        while let Some(newline_pos) = buf.iter().position(|&b| b == b'\n') {
+                            let line_bytes: Vec<u8> = buf.drain(..=newline_pos).collect();
+                            let line = match std::str::from_utf8(&line_bytes) {
+                                Ok(s) => s.trim(),
+                                Err(e) => {
+                                    let _ = tx
+                                        .send(Err(AnthropicError::InvalidData(format!(
+                                            "invalid UTF-8 in JSONL stream: {e}"
+                                        ))))
+                                        .await;
+                                    return;
+                                }
+                            };
+                            if line.is_empty() {
+                                continue;
+                            }
+                            let item: Result<MessageBatchIndividualResponse> =
+                                serde_json::from_str(line)
+                                    .map_err(AnthropicError::Serialization);
+                            if tx.send(item).await.is_err() {
+                                return;
+                            }
                         }
-                        let item =
-                            serde_json::from_str(&line).map_err(AnthropicError::Serialization);
-                        if tx.send(item).await.is_err() {
+                        // Check remaining (incomplete line) buffer after extracting lines
+                        if buf.len() > JSONL_MAX_BUFFER_SIZE {
+                            let _ = tx
+                                .send(Err(AnthropicError::InvalidData(
+                                    "JSONL line exceeded maximum buffer size".into(),
+                                )))
+                                .await;
                             return;
                         }
                     }
+                    Err(e) => {
+                        let _ = tx.send(Err(AnthropicError::Http(e))).await;
+                        return;
+                    }
                 }
-                Err(e) => {
-                    let _ = tx.send(Err(AnthropicError::Http(e))).await;
-                    return;
+            }
+
+            if !buf.is_empty() {
+                let line = match std::str::from_utf8(&buf) {
+                    Ok(s) => s.trim(),
+                    Err(e) => {
+                        let _ = tx
+                            .send(Err(AnthropicError::InvalidData(format!(
+                                "invalid UTF-8 in JSONL stream: {e}"
+                            ))))
+                            .await;
+                        return;
+                    }
+                };
+                if !line.is_empty() {
+                    let item: Result<MessageBatchIndividualResponse> =
+                        serde_json::from_str(line).map_err(AnthropicError::Serialization);
+                    let _ = tx.send(item).await;
                 }
             }
         }
-
-        let remaining = buf.trim().to_owned();
-        if !remaining.is_empty() {
-            let item =
-                serde_json::from_str(&remaining).map_err(AnthropicError::Serialization);
-            let _ = tx.send(item).await;
-        }
-    });
-
-    tokio_stream::wrappers::ReceiverStream::new(rx)
+    })
 }

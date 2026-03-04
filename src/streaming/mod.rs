@@ -7,10 +7,12 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures_core::Stream;
+use futures_util::StreamExt;
 use pin_project_lite::pin_project;
 
 use crate::backends::StreamTransformer;
 use crate::error::{AnthropicError, Result};
+use crate::platform::BoxByteStream;
 use self::accumulator::MessageAccumulator;
 use self::events::RawMessageStreamEvent;
 use self::sse::{SseEvent, SseParser};
@@ -24,7 +26,7 @@ pin_project! {
     /// Wraps reqwest's byte stream → optional stream transformer → SSE parser → event deserialization.
     pub struct MessageStream {
         #[pin]
-        inner: Pin<Box<dyn Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send>>,
+        inner: BoxByteStream,
         parser: SseParser,
         event_buffer: Vec<SseEvent>,
         transformer: Option<Box<dyn StreamTransformer>>,
@@ -34,7 +36,7 @@ pin_project! {
 
 impl MessageStream {
     pub(crate) fn new(
-        byte_stream: Pin<Box<dyn Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send>>,
+        byte_stream: BoxByteStream,
         transformer: Option<Box<dyn StreamTransformer>>,
     ) -> Self {
         Self {
@@ -51,7 +53,6 @@ impl MessageStream {
     where
         Self: Unpin,
     {
-        use tokio_stream::StreamExt;
         let mut acc = MessageAccumulator::new();
         while let Some(event) = StreamExt::next(&mut self).await {
             let event = event?;

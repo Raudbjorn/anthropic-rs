@@ -2,7 +2,7 @@
 
 Feature-complete, unofficial Rust SDK for the [Anthropic Claude API](https://docs.anthropic.com/en/api).
 
-Covers the full API surface: messages, streaming, tool use, extended thinking, structured output, batches, models, files, web search, code execution, and more. Supports the direct Anthropic API plus AWS Bedrock, Google Vertex AI, and Azure AI Foundry backends behind feature flags.
+Covers the full API surface: messages, streaming, tool use, extended thinking, structured output, batches, models, files, web search, code execution, and more. Supports the direct Anthropic API plus AWS Bedrock, Google Vertex AI, and Azure AI Foundry backends behind feature flags. Builds for both native and **WebAssembly** targets.
 
 > **Status:** Pre-release (`0.1.0`). API surface may change before `1.0`.
 
@@ -460,6 +460,26 @@ cargo run --example bedrock --features bedrock
 cargo run --example vertex --features vertex
 cargo run --example foundry --features foundry
 ```
+
+## WebAssembly Support
+
+The SDK compiles for `wasm32-unknown-unknown` out of the box:
+
+```sh
+cargo build --target wasm32-unknown-unknown --no-default-features
+```
+
+WASM builds use the browser `fetch` API (via reqwest) and JS-based timers for retry backoff. The following adaptations are automatic:
+
+- **No TLS feature needed** — the browser handles TLS
+- **Timeouts** — `connect_timeout` and `request_timeout` are ignored (not supported by browser fetch)
+- **Sleep** — uses `globalThis.setTimeout` via JS interop (works in browsers, Node.js, Deno, and Cloudflare Workers)
+- **Spawning** — uses `wasm_bindgen_futures::spawn_local` instead of `tokio::spawn`
+- **Randomness** — `uuid` and `getrandom` use the JS crypto API
+
+Features not available in WASM:
+- `blocking` — requires a tokio runtime
+- `rustls-tls` / `native-tls` — browser handles TLS
 
 ## Supported Models
 

@@ -39,7 +39,7 @@ pub mod backends;
 pub mod batches;
 #[cfg(feature = "beta")]
 pub mod beta;
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_arch = "wasm32")))]
 pub mod blocking;
 pub mod client;
 pub mod config;
@@ -48,6 +48,7 @@ pub mod http;
 pub mod messages;
 pub mod models_api;
 pub mod page;
+pub(crate) mod platform;
 pub mod streaming;
 pub mod types;
 
