@@ -26,11 +26,12 @@ impl TokenInfo {
     /// Create a new TokenInfo from token exchange response.
     pub fn new(access_token: String, refresh_token: String, expires_in: i64) -> Self {
         let now = chrono::Utc::now().timestamp();
+        let expires_in = expires_in.max(0);
         Self {
             token_type: "Bearer".to_string(),
             access_token,
             refresh_token,
-            expires_at: now + expires_in,
+            expires_at: now.saturating_add(expires_in),
         }
     }
 

@@ -155,8 +155,6 @@ impl Backend for OAuthBackend {
             match flow.storage().load() {
                 Ok(Some(token)) if token.needs_refresh() => {
                     debug!("OAuth token needs refresh");
-                    drop(flow);
-                    let flow = self.flow.read().await;
                     match flow.refresh_token().await {
                         Ok(new_token) => {
                             let mut guard = self.cached_token.write().map_err(|e| {
@@ -176,7 +174,7 @@ impl Backend for OAuthBackend {
                     *guard = Some(token.access_token);
                 }
                 Ok(None) => {
-                    return Err(AnthropicError::OAuth("not authenticated - run `rats login` first".into()));
+                    return Err(AnthropicError::OAuth("not authenticated; perform OAuth login first".into()));
                 }
                 Err(e) => {
                     return Err(AnthropicError::OAuth(format!("failed to load token: {e}")));
@@ -186,7 +184,3 @@ impl Backend for OAuthBackend {
         })
     }
 }
-
-// Make OAuthBackend Send + Sync
-unsafe impl Send for OAuthBackend {}
-unsafe impl Sync for OAuthBackend {}

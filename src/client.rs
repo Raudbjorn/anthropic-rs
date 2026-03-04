@@ -272,6 +272,9 @@ impl Anthropic {
         &self,
         mut params: MessageCreateParams,
     ) -> Result<MessageStream> {
+        // Allow backend to refresh tokens or perform pre-flight checks
+        self.backend.pre_request().await?;
+
         params.stream = Some(true);
         let body = serde_json::to_value(&params)?;
 
@@ -625,6 +628,9 @@ impl Anthropic {
         body: Option<serde_json::Value>,
         query: &[(&str, String)],
     ) -> Result<T> {
+        // Allow backend to refresh tokens or perform pre-flight checks
+        self.backend.pre_request().await?;
+
         let idempotency_key = uuid::Uuid::new_v4().to_string();
         let mut last_error: Option<AnthropicError> = None;
 

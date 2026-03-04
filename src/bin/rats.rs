@@ -131,20 +131,20 @@ fn status() -> Result<(), Box<dyn std::error::Error>> {
     let storage = FileTokenStorage::default_path()?;
     let flow = OAuthFlow::new(storage);
 
-    if flow.is_authenticated()? {
-        let token = flow.storage().load()?.unwrap();
-        let remaining = token.time_until_expiry();
-        println!("Authenticated");
-        println!("  Token expires: {}", token.expires_at_datetime().format("%Y-%m-%d %H:%M:%S UTC"));
-        println!("  Time remaining: {}m {}s", remaining.as_secs() / 60, remaining.as_secs() % 60);
-        if token.needs_refresh() {
-            println!("  (token will be refreshed on next API call)");
+    match flow.storage().load()? {
+        Some(token) if !token.is_expired() => {
+            let remaining = token.time_until_expiry();
+            println!("Authenticated");
+            println!("  Token expires: {}", token.expires_at_datetime().format("%Y-%m-%d %H:%M:%S UTC"));
+            println!("  Time remaining: {}m {}s", remaining.as_secs() / 60, remaining.as_secs() % 60);
+            if token.needs_refresh() {
+                println!("  (token will be refreshed on next API call)");
+            }
         }
-    } else {
-        let has_token = flow.storage().load()?.is_some();
-        if has_token {
+        Some(_) => {
             println!("Token expired. Run `rats login` to re-authenticate.");
-        } else {
+        }
+        None => {
             println!("Not authenticated. Run `rats login` to authenticate.");
         }
     }

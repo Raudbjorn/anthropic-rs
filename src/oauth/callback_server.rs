@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tracing::{debug, info, warn};
 
@@ -76,15 +76,15 @@ impl CallbackServer {
         })?;
         debug!(peer = %peer, "Accepted callback connection");
 
-        // Read the HTTP request (small buffer — we only need the first line)
-        let mut buf = vec![0u8; 4096];
-        let n = stream.read(&mut buf).await.map_err(|e| {
+        // Read the first HTTP request line using buffered reader
+        let mut reader = BufReader::new(&mut stream);
+        let mut first_line = String::new();
+        reader.read_line(&mut first_line).await.map_err(|e| {
             OAuthError::CallbackServer(format!("failed to read request: {e}"))
         })?;
-        let request = String::from_utf8_lossy(&buf[..n]);
-
-        // Parse the first line: "GET /callback?code=...&state=... HTTP/1.1"
-        let first_line = request.lines().next().unwrap_or("");
+        if first_line.trim().is_empty() {
+            return Err(OAuthError::CallbackServer("empty callback request".into()));
+        }
         let path = first_line.split_whitespace().nth(1).unwrap_or("/");
 
         // Parse query parameters using url::Url
@@ -151,6 +151,8 @@ min-height:100vh;margin:0;background:#1a1a2e;color:#e0e0e0}
 }
 
 fn error_response(error: &str, description: &str) -> String {
+    let safe_error = escape_html(error);
+    let safe_description = escape_html(description);
     let body = format!(
         r#"<!DOCTYPE html>
 <html><head><title>Authentication Failed</title>
@@ -158,7 +160,7 @@ fn error_response(error: &str, description: &str) -> String {
 min-height:100vh;margin:0;background:#1a1a2e;color:#e0e0e0}}
 .c{{text-align:center;padding:2rem}}h1{{color:#f87171}}</style>
 </head><body><div class="c"><h1>Authentication Failed</h1>
-<p>{error}: {description}</p></div></body></html>"#
+<p>{safe_error}: {safe_description}</p></div></body></html>"#
     );
 
     format!(
@@ -166,6 +168,15 @@ min-height:100vh;margin:0;background:#1a1a2e;color:#e0e0e0}}
         body.len(),
         body
     )
+}
+
+fn escape_html(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
 }
 
 #[cfg(test)]
