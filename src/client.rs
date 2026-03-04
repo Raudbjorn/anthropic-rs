@@ -51,6 +51,8 @@ pub struct AnthropicBuilder {
     custom_backend: Option<Arc<dyn Backend>>,
     timeout: Timeout,
     retry_config: RetryConfig,
+    #[cfg(feature = "oauth")]
+    client_id: Option<String>,
 }
 
 impl AnthropicBuilder {
@@ -63,6 +65,8 @@ impl AnthropicBuilder {
             custom_backend: None,
             timeout: Timeout::default(),
             retry_config: RetryConfig::default(),
+            #[cfg(feature = "oauth")]
+            client_id: None,
         }
     }
 
@@ -139,6 +143,16 @@ impl AnthropicBuilder {
         self
     }
 
+    /// Set the OAuth client ID.
+    ///
+    /// When set, the client will use OAuth authentication with the specified
+    /// client ID. Requires the `oauth` feature.
+    #[cfg(feature = "oauth")]
+    pub fn client_id(mut self, client_id: impl Into<String>) -> Self {
+        self.client_id = Some(client_id.into());
+        self
+    }
+
     pub fn build(self) -> Result<Anthropic> {
         let backend: Arc<dyn Backend> = if let Some(b) = self.custom_backend {
             b
@@ -211,6 +225,9 @@ impl Anthropic {
         &self,
         mut params: MessageCreateParams,
     ) -> Result<MessageStream> {
+        // Allow backend to refresh tokens or perform pre-flight checks
+        self.backend.pre_request().await?;
+
         params.stream = Some(true);
         let body = serde_json::to_value(&params)?;
 
@@ -560,6 +577,9 @@ impl Anthropic {
         body: Option<serde_json::Value>,
         query: &[(&str, String)],
     ) -> Result<T> {
+        // Allow backend to refresh tokens or perform pre-flight checks
+        self.backend.pre_request().await?;
+
         let idempotency_key = uuid::Uuid::new_v4().to_string();
         let mut last_error: Option<AnthropicError> = None;
 
@@ -695,15 +715,6 @@ fn jsonl_stream(
                     Ok(bytes) => {
                         buf.extend_from_slice(&bytes);
 
-                        if buf.len() > JSONL_MAX_BUFFER_SIZE {
-                            let _ = tx
-                                .send(Err(AnthropicError::InvalidData(
-                                    "JSONL line exceeded maximum buffer size".into(),
-                                )))
-                                .await;
-                            return;
-                        }
-
                         while let Some(newline_pos) = buf.iter().position(|&b| b == b'\n') {
                             let line_bytes: Vec<u8> = buf.drain(..=newline_pos).collect();
                             let line = match std::str::from_utf8(&line_bytes) {
@@ -726,6 +737,15 @@ fn jsonl_stream(
                             if tx.send(item).await.is_err() {
                                 return;
                             }
+                        }
+                        // Check remaining (incomplete line) buffer after extracting lines
+                        if buf.len() > JSONL_MAX_BUFFER_SIZE {
+                            let _ = tx
+                                .send(Err(AnthropicError::InvalidData(
+                                    "JSONL line exceeded maximum buffer size".into(),
+                                )))
+                                .await;
+                            return;
                         }
                     }
                     Err(e) => {
