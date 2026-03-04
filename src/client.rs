@@ -1,8 +1,6 @@
-use std::pin::Pin;
 use std::sync::Arc;
 
-use bytes::Bytes;
-use futures_core::Stream;
+use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::Client;
 use tracing::{debug, warn};
@@ -18,6 +16,7 @@ use crate::http::retry::{calculate_backoff, is_retryable_status, parse_retry_aft
 use crate::messages::{MessageCountTokensParams, MessageCreateParams, MessageTokensCount};
 use crate::models_api::{ModelInfo, ModelListParams};
 use crate::page::Page;
+use crate::platform;
 use crate::streaming::MessageStream;
 use crate::types::message::Message;
 
@@ -172,9 +171,16 @@ impl AnthropicBuilder {
             Arc::new(bb.build()?)
         };
 
+        // connect_timeout and timeout are not supported in WASM (browser fetch API)
+        #[cfg(not(target_arch = "wasm32"))]
         let http = Client::builder()
             .connect_timeout(self.timeout.connect)
             .timeout(self.timeout.request)
+            .build()
+            .map_err(AnthropicError::Http)?;
+
+        #[cfg(target_arch = "wasm32")]
+        let http = Client::builder()
             .build()
             .map_err(AnthropicError::Http)?;
 
@@ -309,7 +315,7 @@ impl Anthropic {
     pub async fn batches_results_stream(
         &self,
         batch_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<MessageBatchIndividualResponse>> + Send>>> {
+    ) -> Result<platform::BoxResultStream<MessageBatchIndividualResponse>> {
         let path_segments: Vec<&str> =
             vec!["v1", "messages", "batches", batch_id, "results"];
 
@@ -340,9 +346,8 @@ impl Anthropic {
             return Err(AnthropicError::from_status(status, hdrs, body));
         }
 
-        let byte_stream = response.bytes_stream();
-        let line_stream = jsonl_stream(byte_stream);
-        Ok(Box::pin(line_stream))
+        let byte_stream: platform::BoxByteStream = Box::pin(response.bytes_stream());
+        Ok(jsonl_stream(byte_stream))
     }
 
     // ── Models ────────────────────────────────────────────────────────
@@ -631,7 +636,7 @@ impl Anthropic {
                                 calculate_backoff(attempt + 1, &self.retry_config)
                             });
                         debug!(attempt, ?backoff, status, "retrying request");
-                        tokio::time::sleep(backoff).await;
+                        platform::sleep(backoff).await;
                         last_error = Some(err);
                         continue;
                     }
@@ -643,7 +648,7 @@ impl Anthropic {
                     if attempt < self.retry_config.max_retries && err.is_retryable() {
                         let backoff = calculate_backoff(attempt + 1, &self.retry_config);
                         warn!(attempt, ?backoff, "retrying after HTTP error");
-                        tokio::time::sleep(backoff).await;
+                        platform::sleep(backoff).await;
                         last_error = Some(err);
                         continue;
                     }
@@ -676,53 +681,50 @@ impl Anthropic {
 }
 
 /// Convert a byte stream (JSONL) into a stream of parsed items.
+///
+/// Uses `platform::spawn_stream` which delegates to tokio on native
+/// and wasm_bindgen_futures on WASM.
 fn jsonl_stream(
-    byte_stream: impl Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send + 'static,
-) -> impl Stream<Item = Result<MessageBatchIndividualResponse>> + Send {
-    async_stream(Box::pin(byte_stream))
-}
+    byte_stream: platform::BoxByteStream,
+) -> platform::BoxResultStream<MessageBatchIndividualResponse> {
+    platform::spawn_stream(move |mut tx| {
+        use futures_util::SinkExt;
 
-fn async_stream(
-    mut stream: Pin<Box<dyn Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send>>,
-) -> impl Stream<Item = Result<MessageBatchIndividualResponse>> + Send {
-    use tokio_stream::StreamExt;
+        async move {
+            let mut stream = byte_stream;
+            let mut buf = String::new();
 
-    let (tx, rx) = tokio::sync::mpsc::channel(32);
-
-    tokio::spawn(async move {
-        let mut buf = String::new();
-
-        while let Some(chunk) = StreamExt::next(&mut stream).await {
-            match chunk {
-                Ok(bytes) => {
-                    buf.push_str(&String::from_utf8_lossy(&bytes));
-                    while let Some(newline_pos) = buf.find('\n') {
-                        let line = buf[..newline_pos].trim().to_owned();
-                        buf = buf[newline_pos + 1..].to_owned();
-                        if line.is_empty() {
-                            continue;
-                        }
-                        let item =
-                            serde_json::from_str(&line).map_err(AnthropicError::Serialization);
-                        if tx.send(item).await.is_err() {
-                            return;
+            while let Some(chunk) = StreamExt::next(&mut stream).await {
+                match chunk {
+                    Ok(bytes) => {
+                        buf.push_str(&String::from_utf8_lossy(&bytes));
+                        while let Some(newline_pos) = buf.find('\n') {
+                            let line = buf[..newline_pos].trim().to_owned();
+                            buf = buf[newline_pos + 1..].to_owned();
+                            if line.is_empty() {
+                                continue;
+                            }
+                            let item: Result<MessageBatchIndividualResponse> =
+                                serde_json::from_str(&line)
+                                    .map_err(AnthropicError::Serialization);
+                            if tx.send(item).await.is_err() {
+                                return;
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    let _ = tx.send(Err(AnthropicError::Http(e))).await;
-                    return;
+                    Err(e) => {
+                        let _ = tx.send(Err(AnthropicError::Http(e))).await;
+                        return;
+                    }
                 }
             }
-        }
 
-        let remaining = buf.trim().to_owned();
-        if !remaining.is_empty() {
-            let item =
-                serde_json::from_str(&remaining).map_err(AnthropicError::Serialization);
-            let _ = tx.send(item).await;
+            let remaining = buf.trim().to_owned();
+            if !remaining.is_empty() {
+                let item: Result<MessageBatchIndividualResponse> =
+                    serde_json::from_str(&remaining).map_err(AnthropicError::Serialization);
+                let _ = tx.send(item).await;
+            }
         }
-    });
-
-    tokio_stream::wrappers::ReceiverStream::new(rx)
+    })
 }
