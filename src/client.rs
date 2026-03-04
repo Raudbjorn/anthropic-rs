@@ -171,18 +171,7 @@ impl AnthropicBuilder {
             Arc::new(bb.build()?)
         };
 
-        // connect_timeout and timeout are not supported in WASM (browser fetch API)
-        #[cfg(not(target_arch = "wasm32"))]
-        let http = Client::builder()
-            .connect_timeout(self.timeout.connect)
-            .timeout(self.timeout.request)
-            .build()
-            .map_err(AnthropicError::Http)?;
-
-        #[cfg(target_arch = "wasm32")]
-        let http = Client::builder()
-            .build()
-            .map_err(AnthropicError::Http)?;
+        let http = platform::build_http_client(&self.timeout).map_err(AnthropicError::Http)?;
 
         Ok(Anthropic {
             backend,
@@ -680,10 +669,17 @@ impl Anthropic {
     }
 }
 
+/// Maximum size of the JSONL line buffer (10 MB).
+/// Guards against unbounded memory growth from pathological or malicious responses.
+const JSONL_MAX_BUFFER_SIZE: usize = 10 * 1024 * 1024;
+
 /// Convert a byte stream (JSONL) into a stream of parsed items.
 ///
 /// Uses `platform::spawn_stream` which delegates to tokio on native
 /// and wasm_bindgen_futures on WASM.
+///
+/// Buffers raw bytes (not lossy-decoded strings) to avoid corrupting
+/// multi-byte UTF-8 characters split across chunk boundaries.
 fn jsonl_stream(
     byte_stream: platform::BoxByteStream,
 ) -> platform::BoxResultStream<MessageBatchIndividualResponse> {
@@ -692,20 +688,40 @@ fn jsonl_stream(
 
         async move {
             let mut stream = byte_stream;
-            let mut buf = String::new();
+            let mut buf = Vec::<u8>::new();
 
             while let Some(chunk) = StreamExt::next(&mut stream).await {
                 match chunk {
                     Ok(bytes) => {
-                        buf.push_str(&String::from_utf8_lossy(&bytes));
-                        while let Some(newline_pos) = buf.find('\n') {
-                            let line = buf[..newline_pos].trim().to_owned();
-                            buf = buf[newline_pos + 1..].to_owned();
+                        buf.extend_from_slice(&bytes);
+
+                        if buf.len() > JSONL_MAX_BUFFER_SIZE {
+                            let _ = tx
+                                .send(Err(AnthropicError::InvalidData(
+                                    "JSONL line exceeded maximum buffer size".into(),
+                                )))
+                                .await;
+                            return;
+                        }
+
+                        while let Some(newline_pos) = buf.iter().position(|&b| b == b'\n') {
+                            let line_bytes: Vec<u8> = buf.drain(..=newline_pos).collect();
+                            let line = match std::str::from_utf8(&line_bytes) {
+                                Ok(s) => s.trim(),
+                                Err(e) => {
+                                    let _ = tx
+                                        .send(Err(AnthropicError::InvalidData(format!(
+                                            "invalid UTF-8 in JSONL stream: {e}"
+                                        ))))
+                                        .await;
+                                    return;
+                                }
+                            };
                             if line.is_empty() {
                                 continue;
                             }
                             let item: Result<MessageBatchIndividualResponse> =
-                                serde_json::from_str(&line)
+                                serde_json::from_str(line)
                                     .map_err(AnthropicError::Serialization);
                             if tx.send(item).await.is_err() {
                                 return;
@@ -719,11 +735,23 @@ fn jsonl_stream(
                 }
             }
 
-            let remaining = buf.trim().to_owned();
-            if !remaining.is_empty() {
-                let item: Result<MessageBatchIndividualResponse> =
-                    serde_json::from_str(&remaining).map_err(AnthropicError::Serialization);
-                let _ = tx.send(item).await;
+            if !buf.is_empty() {
+                let line = match std::str::from_utf8(&buf) {
+                    Ok(s) => s.trim(),
+                    Err(e) => {
+                        let _ = tx
+                            .send(Err(AnthropicError::InvalidData(format!(
+                                "invalid UTF-8 in JSONL stream: {e}"
+                            ))))
+                            .await;
+                        return;
+                    }
+                };
+                if !line.is_empty() {
+                    let item: Result<MessageBatchIndividualResponse> =
+                        serde_json::from_str(line).map_err(AnthropicError::Serialization);
+                    let _ = tx.send(item).await;
+                }
             }
         }
     })

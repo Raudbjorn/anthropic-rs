@@ -43,17 +43,48 @@ pub(crate) async fn sleep(duration: std::time::Duration) {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::JsValue;
 
-    let ms = duration.as_millis() as i32;
+    let ms = duration.as_secs_f64() * 1000.0;
     let promise = js_sys::Promise::new(&mut |resolve, _| {
         // Use globalThis.setTimeout — works in browsers, Node, Deno, CF Workers
         let global = js_sys::global();
-        let set_timeout = js_sys::Reflect::get(&global, &JsValue::from_str("setTimeout"))
-            .expect("setTimeout not found in global scope");
-        let args = js_sys::Array::of2(&resolve, &JsValue::from(ms));
-        let set_timeout_fn: &js_sys::Function = set_timeout.unchecked_ref();
+        let Ok(set_timeout) =
+            js_sys::Reflect::get(&global, &JsValue::from_str("setTimeout"))
+        else {
+            // No setTimeout available — resolve immediately
+            let _ = resolve.call0(&JsValue::UNDEFINED);
+            return;
+        };
+        let Ok(set_timeout_fn) = set_timeout.dyn_into::<js_sys::Function>() else {
+            let _ = resolve.call0(&JsValue::UNDEFINED);
+            return;
+        };
+        let args = js_sys::Array::of2(&resolve, &JsValue::from_f64(ms));
         let _ = set_timeout_fn.apply(&global, &args);
     });
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+// ── HTTP client builder ──────────────────────────────────────────────
+
+/// Build a `reqwest::Client` with platform-appropriate timeout settings.
+///
+/// On native: applies `connect_timeout` and `request` timeout.
+/// On WASM: skips timeouts (not supported by browser fetch API).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn build_http_client(
+    timeout: &crate::config::Timeout,
+) -> std::result::Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .connect_timeout(timeout.connect)
+        .timeout(timeout.request)
+        .build()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn build_http_client(
+    _timeout: &crate::config::Timeout,
+) -> std::result::Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder().build()
 }
 
 // ── Spawn + channel-based stream ─────────────────────────────────────
