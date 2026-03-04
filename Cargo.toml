@@ -82,10 +82,3 @@ required-features = ["vertex"]
 name = "foundry"
 required-features = ["foundry"]
 
-[[example]]
-name = "oauth_login"
-required-features = ["oauth"]
-
-[[bin]]
-name = "rats"
-required-features = ["cli"]

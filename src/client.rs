@@ -322,6 +322,9 @@ impl Anthropic {
         &self,
         batch_id: &str,
     ) -> Result<platform::BoxResultStream<MessageBatchIndividualResponse>> {
+        // Allow backend to perform pre-flight checks (e.g., token refresh)
+        self.backend.pre_request().await?;
+
         let path_segments: Vec<&str> =
             vec!["v1", "messages", "batches", batch_id, "results"];
 

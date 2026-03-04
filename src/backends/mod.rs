@@ -101,6 +101,14 @@ pub trait Backend: Send + Sync {
     fn stream_transformer(&self) -> Option<Box<dyn StreamTransformer>> {
         None
     }
+
+    /// Async hook called before each request.
+    ///
+    /// Used by backends that need pre-flight operations (e.g., token refresh).
+    /// The default is a no-op.
+    fn pre_request(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Transforms streaming response bytes from a backend-specific format to SSE.
