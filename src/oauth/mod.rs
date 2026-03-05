@@ -151,9 +151,42 @@ impl Backend for OAuthBackend {
 
     fn pre_request(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            let flow = self.flow.read().await;
+            // Fast path: read lock to check if refresh is needed.
+            {
+                let flow = self.flow.read().await;
+                match flow.storage().load() {
+                    Ok(Some(token)) if !token.needs_refresh() => {
+                        let mut guard = self.cached_token.write().map_err(|e| {
+                            AnthropicError::Config(format!("lock poisoned: {e}"))
+                        })?;
+                        *guard = Some(token.access_token);
+                        return Ok(());
+                    }
+                    Ok(None) => {
+                        return Err(AnthropicError::OAuth(
+                            "not authenticated; perform OAuth login first".into(),
+                        ));
+                    }
+                    Err(e) => {
+                        return Err(AnthropicError::OAuth(format!("failed to load token: {e}")));
+                    }
+                    _ => {} // needs refresh — fall through to write lock
+                }
+            }
+
+            // Slow path: acquire write lock to serialize refresh attempts.
+            let flow = self.flow.write().await;
+
+            // Double-check after acquiring write lock — another task may have refreshed already.
             match flow.storage().load() {
-                Ok(Some(token)) if token.needs_refresh() => {
+                Ok(Some(token)) if !token.needs_refresh() => {
+                    let mut guard = self.cached_token.write().map_err(|e| {
+                        AnthropicError::Config(format!("lock poisoned: {e}"))
+                    })?;
+                    *guard = Some(token.access_token);
+                    return Ok(());
+                }
+                Ok(Some(_)) => {
                     debug!("OAuth token needs refresh");
                     match flow.refresh_token().await {
                         Ok(new_token) => {
@@ -163,18 +196,16 @@ impl Backend for OAuthBackend {
                             *guard = Some(new_token.access_token);
                         }
                         Err(e) => {
-                            return Err(AnthropicError::OAuth(format!("token refresh failed: {e}")));
+                            return Err(AnthropicError::OAuth(format!(
+                                "token refresh failed: {e}"
+                            )));
                         }
                     }
                 }
-                Ok(Some(token)) => {
-                    let mut guard = self.cached_token.write().map_err(|e| {
-                        AnthropicError::Config(format!("lock poisoned: {e}"))
-                    })?;
-                    *guard = Some(token.access_token);
-                }
                 Ok(None) => {
-                    return Err(AnthropicError::OAuth("not authenticated; perform OAuth login first".into()));
+                    return Err(AnthropicError::OAuth(
+                        "not authenticated; perform OAuth login first".into(),
+                    ));
                 }
                 Err(e) => {
                     return Err(AnthropicError::OAuth(format!("failed to load token: {e}")));

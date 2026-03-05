@@ -438,6 +438,8 @@ impl Anthropic {
         filename: &str,
         purpose: &str,
     ) -> Result<crate::beta::files::FileMetadata> {
+        self.backend.pre_request().await?;
+
         let form = reqwest::multipart::Form::new()
             .part(
                 "file",
@@ -474,6 +476,8 @@ impl Anthropic {
 
     #[cfg(feature = "beta")]
     pub async fn files_download(&self, file_id: &str) -> Result<bytes::Bytes> {
+        self.backend.pre_request().await?;
+
         let mut req = BackendRequest {
             method: reqwest::Method::GET,
             path_segments: vec!["v1".into(), "files".into(), file_id.into(), "content".into()],

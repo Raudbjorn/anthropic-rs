@@ -88,7 +88,6 @@ impl<S: TokenStorage> OAuthFlow<S> {
 
         let mut url = Url::parse(&self.config.authorize_url)?;
         url.query_pairs_mut()
-            .append_pair("code", "true")
             .append_pair("response_type", "code")
             .append_pair("client_id", &self.config.client_id)
             .append_pair("redirect_uri", &self.config.redirect_uri)
