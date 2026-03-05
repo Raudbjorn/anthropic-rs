@@ -47,6 +47,8 @@ pub mod error;
 pub mod http;
 pub mod messages;
 pub mod models_api;
+#[cfg(feature = "oauth")]
+pub mod oauth;
 pub mod page;
 pub(crate) mod platform;
 pub mod streaming;

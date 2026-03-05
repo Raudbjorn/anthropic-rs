@@ -75,6 +75,11 @@ pub enum AnthropicError {
     /// Configuration error (missing API key, invalid base URL, etc.).
     #[error("configuration error: {0}")]
     Config(String),
+
+    /// OAuth authentication error.
+    #[cfg(feature = "oauth")]
+    #[error("OAuth error: {0}")]
+    OAuth(String),
 }
 
 impl AnthropicError {
