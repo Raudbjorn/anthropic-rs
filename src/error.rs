@@ -80,6 +80,11 @@ pub enum AnthropicError {
     #[cfg(feature = "oauth")]
     #[error("OAuth error: {0}")]
     OAuth(String),
+
+    /// Realtime WebSocket API error.
+    #[cfg(feature = "realtime")]
+    #[error("Realtime error: {0}")]
+    Realtime(crate::realtime::error::RealtimeErrorKind),
 }
 
 impl AnthropicError {
