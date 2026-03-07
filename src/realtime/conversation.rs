@@ -65,13 +65,15 @@ impl ConversationState {
 
     /// Truncate an item's audio (from `conversation.item.truncated`).
     ///
-    /// Clears the audio and transcript data for the specified content part,
-    /// mirroring the server-side truncation.
+    /// Clears the audio and transcript data for the specified content part.
+    /// The `_audio_end_ms` parameter is intentionally ignored because this
+    /// client-side cache lacks the audio format/sample rate information needed
+    /// to compute byte offsets. As a conservative fallback, the entire audio
+    /// and transcript are cleared — matching the OpenAI reference SDK behavior.
     pub fn truncate_item(&mut self, item_id: &str, content_index: u32, _audio_end_ms: u32) {
         if let Some(item) = self.get_item_mut(item_id) {
             if let Some(content) = item.content.as_mut() {
                 if let Some(part) = content.get_mut(content_index as usize) {
-                    // Remove the audio data (transcript is also cleared by the server)
                     part.audio = None;
                     part.transcript = None;
                 }

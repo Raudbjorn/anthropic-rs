@@ -10,6 +10,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, tungstenite, MaybeTlsStream};
 
 use crate::error::{AnthropicError, Result};
+use super::error::RealtimeErrorKind;
 
 // ── Message types ────────────────────────────────────────────────────
 
@@ -127,7 +128,9 @@ pub(crate) async fn connect_ws(
     tracing::debug!(url = %url, "connecting to realtime WebSocket");
 
     let (ws_stream, _response) = connect_async(request).await.map_err(|e| {
-        AnthropicError::Config(format!("WebSocket connection failed: {e}"))
+        AnthropicError::Realtime(RealtimeErrorKind::ConnectionFailed(
+            format!("WebSocket connection failed: {e}"),
+        ))
     })?;
 
     tracing::debug!("realtime WebSocket connected");

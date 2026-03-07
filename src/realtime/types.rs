@@ -120,8 +120,8 @@ impl<'de> Deserialize<'de> for RealtimeModel {
         let s = String::deserialize(deserializer)?;
         Ok(match s.as_str() {
             "gpt-realtime" => Self::GptRealtime,
-            s if s.starts_with("gpt-4o-realtime-preview") => Self::Gpt4oRealtimePreview,
-            s if s.starts_with("gpt-4o-mini-realtime-preview") => Self::Gpt4oMiniRealtimePreview,
+            "gpt-4o-realtime-preview" => Self::Gpt4oRealtimePreview,
+            "gpt-4o-mini-realtime-preview" => Self::Gpt4oMiniRealtimePreview,
             _ => Self::Other(s),
         })
     }
@@ -361,6 +361,28 @@ pub struct Session {
     pub max_response_output_tokens: Option<MaxOutputTokens>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracing: Option<Tracing>,
+}
+
+impl Session {
+    /// Merge another session into this one, overwriting only fields that are `Some`.
+    pub fn merge(&mut self, other: Session) {
+        macro_rules! merge_field {
+            ($($field:ident),* $(,)?) => {
+                $(
+                    if other.$field.is_some() {
+                        self.$field = other.$field;
+                    }
+                )*
+            };
+        }
+        merge_field!(
+            id, model, modalities, instructions, voice,
+            input_audio_format, output_audio_format,
+            input_audio_transcription, input_audio_noise_reduction,
+            turn_detection, tools, tool_choice, temperature, speed,
+            max_response_output_tokens, tracing,
+        );
+    }
 }
 
 // ── Conversation Items ───────────────────────────────────────────────

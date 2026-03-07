@@ -9,8 +9,8 @@ pub enum RealtimeErrorKind {
     ConnectionFailed(String),
     /// WebSocket connection was closed.
     ConnectionClosed {
-        code: u16,
-        reason: String,
+        code: Option<u16>,
+        reason: Option<String>,
     },
     /// The server sent an error event.
     ServerError {
@@ -31,7 +31,12 @@ impl fmt::Display for RealtimeErrorKind {
         match self {
             Self::ConnectionFailed(msg) => write!(f, "connection failed: {msg}"),
             Self::ConnectionClosed { code, reason } => {
-                write!(f, "connection closed ({code}): {reason}")
+                match (code, reason) {
+                    (Some(c), Some(r)) => write!(f, "connection closed ({c}): {r}"),
+                    (Some(c), None) => write!(f, "connection closed ({c})"),
+                    (None, Some(r)) => write!(f, "connection closed: {r}"),
+                    (None, None) => write!(f, "connection closed"),
+                }
             }
             Self::ServerError { error_type, message, .. } => {
                 write!(f, "server error ({error_type}): {message}")

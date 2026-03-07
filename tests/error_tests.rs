@@ -91,8 +91,8 @@ mod realtime_errors {
     #[test]
     fn connection_closed_is_retryable() {
         let err = AnthropicError::Realtime(RealtimeErrorKind::ConnectionClosed {
-            code: 1006,
-            reason: "abnormal".into(),
+            code: Some(1006),
+            reason: Some("abnormal".into()),
         });
         assert!(err.is_retryable());
     }

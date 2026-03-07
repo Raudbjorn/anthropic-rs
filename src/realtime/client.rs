@@ -14,6 +14,7 @@ use base64::Engine;
 use super::client_events::ClientEvent;
 use super::platform::{self, WsMessage, WsStream};
 use super::server_events::ServerEvent;
+use super::error::RealtimeErrorKind;
 use super::types::{
     ConversationItem, ItemType, RealtimeModel, RealtimeResponse, RealtimeTool,
     ResponseCreateParams, Session,
@@ -162,8 +163,21 @@ impl RealtimeClient {
                     // Skip binary frames; the Realtime API uses JSON text frames.
                     continue;
                 }
-                Ok(WsMessage::Close(_)) => {
-                    return None;
+                Ok(WsMessage::Close(frame)) => {
+                    let (code, reason) = match frame {
+                        Some(f) => (
+                            Some(f.code),
+                            if f.reason.is_empty() { None } else { Some(f.reason) },
+                        ),
+                        None => (None, None),
+                    };
+                    // Normal close (1000) is treated as clean EOF.
+                    if code == Some(1000) || code.is_none() {
+                        return None;
+                    }
+                    return Some(Err(AnthropicError::Realtime(
+                        RealtimeErrorKind::ConnectionClosed { code, reason },
+                    )));
                 }
                 Err(e) => {
                     return Some(Err(e));

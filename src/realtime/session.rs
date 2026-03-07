@@ -18,8 +18,15 @@ impl SessionState {
     }
 
     /// Update from a `session.created` or `session.updated` event.
-    pub fn update(&mut self, session: Session) {
-        self.session = Some(session);
+    ///
+    /// Merges the incoming session into the existing one: only fields that are
+    /// `Some` in the incoming payload overwrite existing values. This preserves
+    /// fields like `id` when the server sends a sparse `session.updated` event.
+    pub fn update(&mut self, incoming: Session) {
+        match self.session.as_mut() {
+            Some(existing) => existing.merge(incoming),
+            None => self.session = Some(incoming),
+        }
     }
 
     /// Get the current session, if initialized.
@@ -63,7 +70,33 @@ mod tests {
     }
 
     #[test]
-    fn update_replaces_session() {
+    fn update_merges_session() {
+        let mut state = SessionState::new();
+        state.update(Session {
+            id: Some("sess_1".into()),
+            instructions: Some("Be helpful.".into()),
+            ..Default::default()
+        });
+        // Sparse update: only voice, no id or instructions
+        state.update(Session {
+            voice: Some(crate::realtime::types::Voice::Coral),
+            ..Default::default()
+        });
+
+        // id and instructions should be preserved
+        assert_eq!(state.id(), Some("sess_1"));
+        assert_eq!(
+            state.get().unwrap().instructions.as_deref(),
+            Some("Be helpful.")
+        );
+        assert_eq!(
+            state.get().unwrap().voice,
+            Some(crate::realtime::types::Voice::Coral)
+        );
+    }
+
+    #[test]
+    fn update_overwrites_with_new_id() {
         let mut state = SessionState::new();
         state.update(Session {
             id: Some("sess_1".into()),
