@@ -226,7 +226,7 @@ impl RealtimeClient {
         let name = definition
             .name
             .clone()
-            .unwrap_or_default();
+            .expect("tool definition must have a name to be registered with a handler");
 
         self.tools.insert(
             name,
