@@ -17,6 +17,7 @@ pub enum RealtimeErrorKind {
         error_type: String,
         message: String,
         code: Option<String>,
+        param: Option<String>,
         event_id: Option<String>,
     },
     /// Failed to parse an event received from the server.
@@ -48,6 +49,7 @@ impl RealtimeErrorKind {
             error_type: error.error_type.clone(),
             message: error.message.clone(),
             code: error.code.clone(),
+            param: error.param.clone(),
             event_id: error.event_id.clone(),
         }
     }

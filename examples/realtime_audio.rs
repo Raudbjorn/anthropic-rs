@@ -42,6 +42,9 @@ async fn main() -> anthropic_rs::Result<()> {
                 session.id.as_deref().unwrap_or("unknown")
             );
         }
+        Some(Ok(ServerEvent::Error { error, .. })) => {
+            return Err(anthropic_rs::AnthropicError::InvalidData(error.message));
+        }
         Some(Err(e)) => return Err(e),
         _ => {
             eprintln!("Unexpected first event or connection closed.");
@@ -73,6 +76,9 @@ async fn main() -> anthropic_rs::Result<()> {
     match client.recv().await {
         Some(Ok(ServerEvent::SessionUpdated { .. })) => {
             println!("Session configured for audio (voice: Marin, pcm16).");
+        }
+        Some(Ok(ServerEvent::Error { error, .. })) => {
+            return Err(anthropic_rs::AnthropicError::InvalidData(error.message));
         }
         Some(Ok(other)) => eprintln!("Unexpected event: {other:?}"),
         Some(Err(e)) => return Err(e),

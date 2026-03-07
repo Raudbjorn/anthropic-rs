@@ -737,24 +737,6 @@ fn conversation_item_constructors() {
     assert_eq!(fn_output.output.as_deref(), Some("result"));
 }
 
-#[test]
-fn tracing_auto() {
-    let t = Tracing::auto();
-    let json = serde_json::to_string(&t).unwrap();
-    assert_eq!(json, r#""auto""#);
-}
-
-#[test]
-fn tracing_config() {
-    let t = Tracing::Config(TracingConfig {
-        group_id: Some("grp_1".into()),
-        workflow_name: Some("my_flow".into()),
-        metadata: None,
-    });
-    let json = serde_json::to_string(&t).unwrap();
-    assert!(json.contains("grp_1"));
-    assert!(json.contains("my_flow"));
-}
 
 #[test]
 fn realtime_tool_function() {
@@ -879,4 +861,43 @@ fn full_function_calling_lifecycle() {
     // 4. Client triggers another response
     let create_resp = ClientEvent::create_response();
     let _json = serde_json::to_string(&create_resp).unwrap();
+}
+
+// ── Forward Compatibility ────────────────────────────────────────────
+
+#[test]
+fn unknown_server_event_deserializes() {
+    let json = r#"{"type": "some.future.event", "event_id": "evt_999", "data": "hello"}"#;
+    let event: ServerEvent = serde_json::from_str(json).unwrap();
+    assert!(matches!(event, ServerEvent::Unknown));
+    assert_eq!(event.event_id(), "");
+}
+
+// ── Tracing Validation ──────────────────────────────────────────────
+
+#[test]
+fn tracing_auto_roundtrip() {
+    let t = Tracing::auto();
+    let json = serde_json::to_string(&t).unwrap();
+    assert_eq!(json, r#""auto""#);
+    let parsed: Tracing = serde_json::from_str(&json).unwrap();
+    assert!(matches!(parsed, Tracing::Auto));
+}
+
+#[test]
+fn tracing_rejects_non_auto_string() {
+    let result = serde_json::from_str::<Tracing>(r#""not_auto""#);
+    assert!(result.is_err());
+}
+
+#[test]
+fn tracing_config_roundtrip() {
+    let t = Tracing::Config(TracingConfig {
+        group_id: Some("grp_1".into()),
+        workflow_name: Some("my_flow".into()),
+        metadata: None,
+    });
+    let json = serde_json::to_string(&t).unwrap();
+    let parsed: Tracing = serde_json::from_str(&json).unwrap();
+    assert!(matches!(parsed, Tracing::Config(_)));
 }

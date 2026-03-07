@@ -26,13 +26,29 @@ impl ConversationState {
         Self::default()
     }
 
-    /// Add an item to the conversation (from `conversation.item.created`).
+    /// Add an item to the end of the conversation.
     pub fn add_item(&mut self, item: ConversationItem) {
+        self.add_item_after(item, None);
+    }
+
+    /// Add an item after the given `previous_item_id`, or at the end if `None`.
+    ///
+    /// This respects the ordering hint from `conversation.item.created` events.
+    pub fn add_item_after(&mut self, item: ConversationItem, previous_item_id: Option<&str>) {
+        let insert_pos = previous_item_id
+            .and_then(|prev_id| self.index.get(prev_id).map(|&pos| pos + 1))
+            .unwrap_or(self.items.len());
+
         if let Some(id) = item.id.as_ref() {
-            let pos = self.items.len();
-            self.index.insert(id.clone(), pos);
+            self.index.insert(id.clone(), insert_pos);
         }
-        self.items.push(item);
+
+        if insert_pos >= self.items.len() {
+            self.items.push(item);
+        } else {
+            self.items.insert(insert_pos, item);
+            self.rebuild_index_from(insert_pos + 1);
+        }
     }
 
     /// Remove an item by ID (from `conversation.item.deleted`).
@@ -330,5 +346,47 @@ mod tests {
         let state2 = ConversationState::default();
         assert!(state1.is_empty());
         assert!(state2.is_empty());
+    }
+
+    #[test]
+    fn add_item_after_inserts_at_correct_position() {
+        let mut state = ConversationState::new();
+        state.add_item(make_message("msg_1", Role::User));
+        state.add_item(make_message("msg_3", Role::User));
+
+        // Insert msg_2 after msg_1
+        state.add_item_after(make_message("msg_2", Role::Assistant), Some("msg_1"));
+
+        let items = state.items();
+        assert_eq!(items[0].id.as_deref(), Some("msg_1"));
+        assert_eq!(items[1].id.as_deref(), Some("msg_2"));
+        assert_eq!(items[2].id.as_deref(), Some("msg_3"));
+
+        // All lookups still work
+        assert!(state.get_item("msg_1").is_some());
+        assert!(state.get_item("msg_2").is_some());
+        assert!(state.get_item("msg_3").is_some());
+    }
+
+    #[test]
+    fn add_item_after_unknown_id_appends() {
+        let mut state = ConversationState::new();
+        state.add_item(make_message("msg_1", Role::User));
+
+        // Unknown previous_item_id falls back to append
+        state.add_item_after(make_message("msg_2", Role::Assistant), Some("nonexistent"));
+
+        assert_eq!(state.len(), 2);
+        assert_eq!(state.items()[1].id.as_deref(), Some("msg_2"));
+    }
+
+    #[test]
+    fn add_item_after_none_appends() {
+        let mut state = ConversationState::new();
+        state.add_item(make_message("msg_1", Role::User));
+        state.add_item_after(make_message("msg_2", Role::Assistant), None);
+
+        assert_eq!(state.len(), 2);
+        assert_eq!(state.items()[1].id.as_deref(), Some("msg_2"));
     }
 }

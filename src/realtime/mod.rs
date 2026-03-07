@@ -28,10 +28,8 @@
 //! // Serialize to JSON for sending over WebSocket
 //! let json = serde_json::to_string(&event).unwrap();
 //!
-//! // Deserialize a server event from received JSON
-//! let server_event: ServerEvent = serde_json::from_str(&json).unwrap_or_else(|_| {
-//!     panic!("unknown event");
-//! });
+//! // Deserialize a client event from JSON (roundtrip)
+//! let parsed: ClientEvent = serde_json::from_str(&json).unwrap();
 //! # }
 //! ```
 

@@ -25,6 +25,9 @@ async fn main() -> anthropic_rs::Result<()> {
                 session.id.as_deref().unwrap_or("unknown")
             );
         }
+        Some(Ok(ServerEvent::Error { error, .. })) => {
+            return Err(anthropic_rs::AnthropicError::InvalidData(error.message));
+        }
         Some(Err(e)) => return Err(e),
         _ => {
             eprintln!("Unexpected first event or connection closed.");
@@ -66,7 +69,7 @@ async fn main() -> anthropic_rs::Result<()> {
             "humidity_percent": 65,
             "wind_kph": 12
         })
-    });
+    })?;
 
     // Configure session with text modality, the weather tool, and auto tool choice.
     client
@@ -87,6 +90,9 @@ async fn main() -> anthropic_rs::Result<()> {
     match client.recv().await {
         Some(Ok(ServerEvent::SessionUpdated { .. })) => {
             println!("Session configured with get_weather tool.\n");
+        }
+        Some(Ok(ServerEvent::Error { error, .. })) => {
+            return Err(anthropic_rs::AnthropicError::InvalidData(error.message));
         }
         Some(Ok(other)) => eprintln!("Unexpected event: {other:?}"),
         Some(Err(e)) => return Err(e),

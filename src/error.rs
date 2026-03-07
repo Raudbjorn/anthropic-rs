@@ -98,6 +98,12 @@ impl AnthropicError {
                     | HttpErrorKind::Overloaded
             ) || matches!(details.status, 408 | 409),
             Self::Io(_) | Self::Http(_) => true,
+            #[cfg(feature = "realtime")]
+            Self::Realtime(kind) => matches!(
+                kind,
+                crate::realtime::error::RealtimeErrorKind::ConnectionFailed(_)
+                    | crate::realtime::error::RealtimeErrorKind::ConnectionClosed { .. }
+            ),
             _ => false,
         }
     }

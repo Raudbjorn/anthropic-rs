@@ -35,7 +35,7 @@ const DEFAULT_BASE_URL: &str = "wss://api.openai.com/v1/realtime";
 // ── RealtimeConfig ───────────────────────────────────────────────────
 
 /// Configuration for connecting to the Realtime API.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RealtimeConfig {
     /// OpenAI API key.
     pub api_key: String,
@@ -43,6 +43,16 @@ pub struct RealtimeConfig {
     pub model: RealtimeModel,
     /// Override the base WebSocket URL (default: `wss://api.openai.com/v1/realtime`).
     pub url: Option<String>,
+}
+
+impl std::fmt::Debug for RealtimeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RealtimeConfig")
+            .field("api_key", &"<redacted>")
+            .field("model", &self.model)
+            .field("url", &self.url)
+            .finish()
+    }
 }
 
 impl RealtimeConfig {
@@ -96,7 +106,12 @@ impl RealtimeClient {
             .as_deref()
             .unwrap_or(DEFAULT_BASE_URL);
 
-        let url = format!("{}?model={}", base_url, config.model);
+        let mut ws_url = url::Url::parse(base_url)
+            .map_err(|e| AnthropicError::Config(format!("invalid base URL: {e}")))?;
+        ws_url
+            .query_pairs_mut()
+            .append_pair("model", config.model.as_str());
+        let url = ws_url.to_string();
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -218,20 +233,26 @@ impl RealtimeClient {
     /// The `definition` should be a `RealtimeTool::function(...)` that
     /// describes the tool's name, description, and parameter schema.
     /// Include it in your `Session.tools` when configuring the session.
-    pub fn add_tool<F, Fut>(&mut self, definition: RealtimeTool, handler: F)
+    pub fn add_tool<F, Fut>(&mut self, definition: RealtimeTool, handler: F) -> Result<()>
     where
         F: Fn(serde_json::Value) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = serde_json::Value> + Send + 'static,
     {
-        let name = definition
-            .name
-            .clone()
-            .expect("tool definition must have a name to be registered with a handler");
+        let name = definition.name.clone().ok_or_else(|| {
+            AnthropicError::Config("RealtimeTool must have a name".into())
+        })?;
+
+        if self.tools.contains_key(&name) {
+            return Err(AnthropicError::Config(format!(
+                "duplicate tool name: {name}"
+            )));
+        }
 
         self.tools.insert(
             name,
             Box::new(move |args| Box::pin(handler(args))),
         );
+        Ok(())
     }
 
     /// Process function calls from a completed response.
@@ -245,6 +266,8 @@ impl RealtimeClient {
             Some(items) => items,
             None => return Ok(()),
         };
+
+        let mut handled_any = false;
 
         for item in output {
             if item.item_type != Some(ItemType::FunctionCall) {
@@ -273,7 +296,18 @@ impl RealtimeClient {
             };
 
             let args_str = item.arguments.as_deref().unwrap_or("{}");
-            let args: serde_json::Value = serde_json::from_str(args_str).unwrap_or_default();
+            let args: serde_json::Value = match serde_json::from_str(args_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        function = %name,
+                        args = %args_str,
+                        error = %e,
+                        "failed to parse function call arguments, using null"
+                    );
+                    serde_json::Value::Null
+                }
+            };
 
             tracing::debug!(function = %name, args = %args, "executing function call");
 
@@ -285,10 +319,14 @@ impl RealtimeClient {
 
             let output_item = ConversationItem::function_call_output(call_id, result_str);
             self.send(ClientEvent::create_item(output_item)).await?;
+            handled_any = true;
         }
 
-        // Trigger a new response after sending all function call outputs.
-        self.send(ClientEvent::create_response()).await
+        // Only trigger a new response if we actually handled function calls.
+        if handled_any {
+            self.send(ClientEvent::create_response()).await?;
+        }
+        Ok(())
     }
 
     /// Close the WebSocket connection gracefully.

@@ -81,6 +81,9 @@ impl WsStream {
                     // Raw frames are not expected; skip.
                     continue;
                 }
+                Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
+                    return None;
+                }
                 Err(e) => {
                     return Some(Err(AnthropicError::Io(std::io::Error::new(
                         std::io::ErrorKind::ConnectionReset,

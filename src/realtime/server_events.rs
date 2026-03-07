@@ -12,8 +12,8 @@ use super::types::{
 /// All server-sent events, discriminated by the `type` field.
 ///
 /// Each variant maps to an OpenAI Realtime API server event.
-/// Unknown event types are captured as `Unknown` to ensure forward
-/// compatibility (new event types may be added by the API at any time).
+/// Unrecognized event types deserialize as [`Unknown`](Self::Unknown)
+/// for forward compatibility (new event types may be added by the API).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ServerEvent {
@@ -323,6 +323,13 @@ pub enum ServerEvent {
         event_id: String,
         response_id: String,
     },
+
+    /// An unrecognized event type (forward compatibility).
+    ///
+    /// Payload data is not preserved; use this variant to detect and skip
+    /// unknown events without failing deserialization.
+    #[serde(other)]
+    Unknown,
 }
 
 impl ServerEvent {
@@ -361,6 +368,7 @@ impl ServerEvent {
             | Self::OutputAudioBufferStarted { event_id, .. }
             | Self::OutputAudioBufferStopped { event_id, .. }
             | Self::OutputAudioBufferCleared { event_id, .. } => event_id,
+            Self::Unknown => "",
         }
     }
 

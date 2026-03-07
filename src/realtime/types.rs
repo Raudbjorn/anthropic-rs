@@ -275,16 +275,39 @@ impl<'de> Deserialize<'de> for MaxOutputTokens {
 // ── Tracing ──────────────────────────────────────────────────────────
 
 /// Tracing configuration: `"auto"` or a structured config.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum Tracing {
-    Auto(String),
+    Auto,
     Config(TracingConfig),
 }
 
 impl Tracing {
     pub fn auto() -> Self {
-        Self::Auto("auto".into())
+        Self::Auto
+    }
+}
+
+impl Serialize for Tracing {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Auto => serializer.serialize_str("auto"),
+            Self::Config(config) => config.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Tracing {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let v = serde_json::Value::deserialize(deserializer)?;
+        match &v {
+            serde_json::Value::String(s) if s == "auto" => Ok(Self::Auto),
+            serde_json::Value::Object(_) => serde_json::from_value(v)
+                .map(Self::Config)
+                .map_err(serde::de::Error::custom),
+            _ => Err(serde::de::Error::custom(
+                "expected \"auto\" or a tracing config object",
+            )),
+        }
     }
 }
 

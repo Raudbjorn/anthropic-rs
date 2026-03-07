@@ -14,22 +14,19 @@ Messages API. It uses a **persistent, bidirectional WebSocket** connection with
 JSON-serialized events flowing in both directions. This requires new
 abstractions rather than extending the existing `Backend` trait.
 
-```
+```text
 anthropic-rs/src/
   realtime/
     mod.rs              # Module root, public re-exports
-    client.rs           # RealtimeClient - connection, send/recv, reconnect
-    config.rs           # RealtimeConfig - session params, audio format, VAD
-    events/
-      mod.rs            # Re-exports
-      client_events.rs  # All client-sent event types
-      server_events.rs  # All server-sent event types
-      common.rs         # Shared event primitives (Item, ContentPart, etc.)
+    types.rs            # Shared types (Session, ConversationItem, Voice, etc.)
+    client_events.rs    # All client-sent event types (11 variants)
+    server_events.rs    # All server-sent event types (28 variants)
+    client.rs           # RealtimeClient + RealtimeConfig (native only)
     session.rs          # Session state tracking
     conversation.rs     # Client-side conversation cache
     audio.rs            # Base64 audio encoding/decoding, PCM16 helpers
     error.rs            # Realtime-specific errors (close codes, event errors)
-    platform.rs         # WebSocket platform abstraction (native/WASM)
+    platform.rs         # WebSocket platform abstraction (native only)
 ```
 
 ## Phases

@@ -24,6 +24,11 @@ async fn main() -> anthropic_rs::Result<()> {
                 session.id.as_deref().unwrap_or("unknown")
             );
         }
+        Some(Ok(ServerEvent::Error { error, .. })) => {
+            eprintln!("Server error during setup: {}", error.message);
+            client.close().await?;
+            return Err(anthropic_rs::AnthropicError::InvalidData(error.message));
+        }
         Some(Ok(other)) => {
             eprintln!("Unexpected first event: {other:?}");
             client.close().await?;
@@ -49,6 +54,9 @@ async fn main() -> anthropic_rs::Result<()> {
     match client.recv().await {
         Some(Ok(ServerEvent::SessionUpdated { .. })) => {
             println!("Session configured for text-only output.");
+        }
+        Some(Ok(ServerEvent::Error { error, .. })) => {
+            return Err(anthropic_rs::AnthropicError::InvalidData(error.message));
         }
         Some(Ok(other)) => eprintln!("Unexpected event after session update: {other:?}"),
         Some(Err(e)) => return Err(e),
