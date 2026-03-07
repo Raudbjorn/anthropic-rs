@@ -247,7 +247,7 @@ Wire into `Anthropic` client and feature flags.
 **Cargo.toml additions:**
 ```toml
 # Native WebSocket
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"], optional = true }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"], optional = true }
 
 # WASM WebSocket (already have web-sys, just need WebSocket feature)
 # web-sys = { features = ["WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent"] }
