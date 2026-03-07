@@ -74,3 +74,44 @@ fn error_display_includes_message() {
     assert!(display.contains("403"));
     assert!(display.contains("not allowed"));
 }
+
+#[cfg(feature = "realtime")]
+mod realtime_errors {
+    use anthropic_rs::error::AnthropicError;
+    use anthropic_rs::realtime::RealtimeErrorKind;
+
+    #[test]
+    fn connection_failed_is_retryable() {
+        let err = AnthropicError::Realtime(RealtimeErrorKind::ConnectionFailed(
+            "timeout".into(),
+        ));
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn connection_closed_is_retryable() {
+        let err = AnthropicError::Realtime(RealtimeErrorKind::ConnectionClosed {
+            code: Some(1006),
+            reason: Some("abnormal".into()),
+        });
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn server_error_not_retryable() {
+        let err = AnthropicError::Realtime(RealtimeErrorKind::ServerError {
+            error_type: "invalid_request".into(),
+            message: "bad".into(),
+            code: None,
+            param: None,
+            event_id: None,
+        });
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn not_connected_not_retryable() {
+        let err = AnthropicError::Realtime(RealtimeErrorKind::NotConnected);
+        assert!(!err.is_retryable());
+    }
+}

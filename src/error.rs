@@ -80,6 +80,11 @@ pub enum AnthropicError {
     #[cfg(feature = "oauth")]
     #[error("OAuth error: {0}")]
     OAuth(String),
+
+    /// Realtime WebSocket API error.
+    #[cfg(feature = "realtime")]
+    #[error("Realtime error: {0}")]
+    Realtime(crate::realtime::error::RealtimeErrorKind),
 }
 
 impl AnthropicError {
@@ -93,6 +98,12 @@ impl AnthropicError {
                     | HttpErrorKind::Overloaded
             ) || matches!(details.status, 408 | 409),
             Self::Io(_) | Self::Http(_) => true,
+            #[cfg(feature = "realtime")]
+            Self::Realtime(kind) => matches!(
+                kind,
+                crate::realtime::error::RealtimeErrorKind::ConnectionFailed(_)
+                    | crate::realtime::error::RealtimeErrorKind::ConnectionClosed { .. }
+            ),
             _ => false,
         }
     }

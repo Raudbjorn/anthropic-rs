@@ -40,6 +40,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["macros", "time", "sync", "io-util", "net", "rt"] }
 tokio-stream = "0.1"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"], optional = true }
 
 # WASM-only dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -68,6 +69,7 @@ blocking = ["tokio/rt-multi-thread"]
 bedrock = ["dep:hmac", "dep:sha2"]
 vertex = []
 foundry = []
+realtime = ["dep:tokio-tungstenite"]
 oauth = ["dep:sha2", "dep:dirs", "dep:open"]
 cli = ["oauth", "dep:clap", "dep:qrcode", "tokio/rt-multi-thread"]
 
@@ -86,6 +88,18 @@ required-features = ["foundry"]
 [[example]]
 name = "oauth_login"
 required-features = ["oauth"]
+
+[[example]]
+name = "realtime_text"
+required-features = ["realtime"]
+
+[[example]]
+name = "realtime_audio"
+required-features = ["realtime"]
+
+[[example]]
+name = "realtime_function_calling"
+required-features = ["realtime"]
 
 [[bin]]
 name = "rats"

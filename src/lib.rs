@@ -50,6 +50,8 @@ pub mod models_api;
 #[cfg(feature = "oauth")]
 pub mod oauth;
 pub mod page;
+#[cfg(feature = "realtime")]
+pub mod realtime;
 pub(crate) mod platform;
 pub mod streaming;
 pub mod types;
