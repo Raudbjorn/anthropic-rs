@@ -382,7 +382,7 @@ impl ServerEvent {
         matches!(self, Self::ResponseDone { .. })
     }
 
-    /// Extract the response from `response.done`, if this is that event.
+    /// Extract the response from `response.done` or `response.created`.
     pub fn into_response(self) -> Option<RealtimeResponse> {
         match self {
             Self::ResponseDone { response, .. } | Self::ResponseCreated { response, .. } => {

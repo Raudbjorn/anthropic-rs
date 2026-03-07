@@ -45,7 +45,7 @@ impl WsStream {
     /// Send a text message over the WebSocket.
     pub async fn send_text(&mut self, msg: String) -> Result<()> {
         self.inner
-            .send(tungstenite::Message::Text(msg))
+            .send(tungstenite::Message::Text(msg.into()))
             .await
             .map_err(|e| {
                 AnthropicError::Io(std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))
@@ -62,15 +62,15 @@ impl WsStream {
             let msg = self.inner.next().await?;
             match msg {
                 Ok(tungstenite::Message::Text(text)) => {
-                    return Some(Ok(WsMessage::Text(text)));
+                    return Some(Ok(WsMessage::Text(text.to_string())));
                 }
                 Ok(tungstenite::Message::Binary(data)) => {
-                    return Some(Ok(WsMessage::Binary(data)));
+                    return Some(Ok(WsMessage::Binary(data.to_vec())));
                 }
                 Ok(tungstenite::Message::Close(frame)) => {
                     let close = frame.map(|f| CloseFrame {
                         code: f.code.into(),
-                        reason: f.reason.into_owned(),
+                        reason: f.reason.to_string(),
                     });
                     return Some(Ok(WsMessage::Close(close)));
                 }
